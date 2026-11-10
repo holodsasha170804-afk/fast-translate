@@ -248,34 +248,6 @@ msgstr ""
 msgid "Copy panel result to clipboard"
 msgstr ""
 
-#: prefs.js:197
-msgid "Double Ctrl+C"
-msgstr ""
-
-#: prefs.js:198
-msgid "Copy the same text twice to translate it instantly."
-msgstr ""
-
-#: prefs.js:203
-msgid "Enable Gesture"
-msgstr ""
-
-#: prefs.js:204
-msgid ""
-"Translate when the same text is copied twice quickly. Turn off if popups "
-"appear unwantedly."
-msgstr ""
-
-#: prefs.js:219
-msgid "Detection Window"
-msgstr ""
-
-#: prefs.js:220
-msgid ""
-"Max time between the two copies in milliseconds. Larger values trigger more "
-"easily but can cause unwanted popups."
-msgstr ""
-
 #: prefs.js:249
 msgid "Auto Copy Popup Result"
 msgstr ""
@@ -310,16 +282,6 @@ msgstr ""
 
 #: prefs.js:290
 msgid "Also show a notification when a panel translation finishes"
-msgstr ""
-
-#: prefs.js:296
-msgid "Clipboard Shortcut"
-msgstr ""
-
-#: prefs.js:297 prefs.js:328
-msgid ""
-"Translate clipboard instantly. Click this row, then press keys to set, Esc "
-"to clear."
 msgstr ""
 
 #: prefs.js:313
@@ -482,39 +444,12 @@ msgstr ""
 msgid "Background Mode"
 msgstr ""
 
-#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:146
-msgid ""
-"Translate in background on double-copy instead of showing the floating window"
-msgstr ""
-
 #: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:150
 msgid "Show Notification in Background Mode"
 msgstr ""
 
 #: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:151
 msgid "Display a notification when background translation finishes"
-msgstr ""
-
-#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:155
-msgid "Enable Double-Copy Gesture"
-msgstr ""
-
-#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:156
-msgid ""
-"Trigger instant translation when the same text is copied twice in quick "
-"succession (Ctrl+C Ctrl+C). Turn off if translation windows appear "
-"unwantedly."
-msgstr ""
-
-#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:161
-msgid "Double-copy detection window"
-msgstr ""
-
-#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:162
-msgid ""
-"Maximum milliseconds between two identical copies to trigger instant "
-"translation. Smaller is stricter; larger triggers more easily but may cause "
-"unwanted popups."
 msgstr ""
 
 #: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml:166
@@ -525,4 +460,44 @@ msgstr ""
 msgid ""
 "Translate automatically the content of the input box and the set the result "
 "in the output box"
+msgstr ""
+
+#: prefs.js
+msgid "Quick Translate"
+msgstr ""
+
+#: prefs.js
+msgid "Quick Translate Shortcut"
+msgstr ""
+
+#: prefs.js
+msgid "Click this row, then press keys to set the shortcut. Press Esc to clear it."
+msgstr ""
+
+#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml
+msgid "Quick Translate shortcut"
+msgstr ""
+
+#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml
+msgid "Translate in background when Quick Translate is triggered instead of showing the floating window"
+msgstr ""
+
+#: extension.js
+msgid "Release the shortcut keys and try again"
+msgstr ""
+
+#: extension.js
+msgid "Could not copy the selected text"
+msgstr ""
+
+#: extension.js
+msgid "Select text and try again"
+msgstr ""
+
+#: prefs.js
+msgid "Select text in any application, then use the shortcut to copy and translate it."
+msgstr ""
+
+#: schemas/org.gnome.shell.extensions.fast-translate.gschema.xml
+msgid "Shortcut to copy the active text selection and translate it in a floating popup"
 msgstr ""

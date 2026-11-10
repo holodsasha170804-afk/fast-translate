@@ -1,5 +1,5 @@
 {
-  "description": "Translate with Google and DeepL Translator.\n\nNote: This extension accesses the clipboard to translate copied text (only when you press Paste, use the clipboard shortcut you set, or double-press Ctrl+C with the gesture enabled) and to copy results back (only on Copy press or when Auto Copy is enabled). Translated text is sent only to the selected service (Google or DeepL) as the translation request.",
+  "description": "Translate with Google and DeepL Translator.\n\nNote: When you trigger the configurable Quick Translate shortcut, this extension sends one virtual Ctrl+C to copy the active text selection, reads that clipboard text, and translates it. It also reads the clipboard when you press Paste, use Ctrl+V in its input, or open the panel with Auto Paste enabled. It copies results back only when you press Copy or enable Auto Copy. Translated text is sent only to the selected service (Google or DeepL) as the translation request.",
   "gettext-domain": "fast-translate@tazztone.github.io",
   "name": "Fast Translate",
   "settings-schema": "org.gnome.shell.extensions.fast-translate",

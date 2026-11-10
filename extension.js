@@ -41,7 +41,7 @@ import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 // Clipboard access is the core, user-visible purpose of this extension
 // (translate clipboard/pasted text, copy results back). Reads happen only on:
 // explicit Paste button press, menu-open while "Auto Paste" is ON (default OFF),
-// a user-set clipboard shortcut, or the double-Ctrl+C gesture (default OFF).
+// Ctrl+V in the focused input, or the user-configurable quick-translate shortcut.
 // Writes happen only on: explicit Copy button press, or while "Auto Copy"/
 // "Floating Auto Copy" is ON (defaults OFF). No background harvesting,
 // no persistence; text is sent only to the user-selected translation service
@@ -53,12 +53,15 @@ function getClipboard() {
 
 const SHORTCUT_SETTING_KEY = "keybinding-translate-clipboard";
 const TIMEOUT_MS = 500;
-// Double-copy gesture timing. MIN filters event-loop duplicate owner-changed
-// signals; the max window is user-configurable via double-copy-delay (ms).
-const DOUBLE_COPY_MIN_US = 180 * 1000;
-const DOUBLE_COPY_DELAY_FALLBACK_MS = 500;
-const DOUBLE_COPY_DELAY_MIN_MS = 300;
-const DOUBLE_COPY_DELAY_MAX_MS = 5000;
+const QUICK_COPY_POLL_MS = 25;
+const QUICK_COPY_RELEASE_TIMEOUT_MS = 1000;
+const QUICK_COPY_CLIPBOARD_TIMEOUT_MS = 800;
+const SHORTCUT_MODIFIER_MASK = Clutter.ModifierType.CONTROL_MASK |
+    Clutter.ModifierType.SHIFT_MASK |
+    Clutter.ModifierType.MOD1_MASK |
+    Clutter.ModifierType.SUPER_MASK |
+    Clutter.ModifierType.META_MASK |
+    Clutter.ModifierType.HYPER_MASK;
 // Untrusted-input guard: clipboard text is attacker-controlled. Cap request size
 // so a multi-MB copy can't freeze the UI, choke notifications, or blast the API.
 const MAX_INPUT_CHARS = 5000;
@@ -181,22 +184,21 @@ var FastTranslate = GObject.registerClass(
             this.FloatingTranslationWindow = FloatingTranslationWindow;
 
             this._settingsChangedId = null;
-            this._clipboardTimeoutId = null;
-            this._selectionOwnerChangedId = null;
-            this._isInternalCopy = false;
-            this._internalCopyTimeoutId = null;
             this._shortcutBound = false;
+            this._virtualKeyboard = null;
+            this._quickCopyWaitId = null;
+            this._quickCopyFallbackId = null;
+            this._quickCopyOwnerChangedId = null;
+            this._quickCopySelection = null;
+            this._quickCopyInjected = false;
+            this._quickCopyPreviousText = null;
+            this._quickCopyGeneration = 0;
             this._interfaceSettings = null;
             this._colorSchemeChangedId = null;
             this._gtkThemeChangedId = null;
             // Debounced typing translation (see _menuTranslationBlock).
             this._inputTextChangedId = null;
             this._typingDebounceId = null;
-            // Lazily-created refs.
-            this.selection = null;
-            this._lastEventArrivalUs = null;
-            this._lastClipboardTime = null;
-            this._lastClipboardText = null;
             this._floatingWindow = null;
             this.sourceSelector = null;
             this.targetSelector = null;
@@ -210,6 +212,7 @@ var FastTranslate = GObject.registerClass(
             this._swapBtnClickedId = null;
             this._targetLabelClickedId = null;
             this._inputBtnPressId = null;
+            this._inputKeyPressId = null;
             this._pasteBtnClickedId = null;
             this._clearBtnClickedId = null;
             this._translateBtnClickedId = null;
@@ -290,8 +293,6 @@ var FastTranslate = GObject.registerClass(
                 this._settingsChanged();
             });
 
-            this._setupListener();
-
             this._addTooltip(this.autoPasteSwitch, _("Automatically paste clipboard text when menu opens"));
             this._addTooltip(this.autoTranslateSwitch, _("Translate input text automatically while typing"));
             this._addTooltip(this.autoCopySwitch, _("Copy translation results to clipboard automatically"));
@@ -309,14 +310,7 @@ var FastTranslate = GObject.registerClass(
                 } else {
                     if (this.autoPasteSwitch.state === true) {
                         // User-gated read: only when "Auto Paste" is ON.
-                        getClipboard().get_text(CLIPBOARD_TYPE, (_, clipboardText) => {
-                            if (this._destroyed) {
-                                return;
-                            }
-                            if (clipboardText) {
-                                this.inputEntry.get_clutter_text().set_text(clipboardText);
-                            }
-                        });
+                        this._replaceInputFromClipboard();
                     }
                     // Give keyboard focus to the input box so the user can type immediately
                     this._trackIdle(() => {
@@ -334,102 +328,6 @@ var FastTranslate = GObject.registerClass(
             let t = new Tooltip(actor, text);
             this._tooltips.push(t);
             return t;
-        }
-
-        _setupListener() {
-            const metaDisplay = global.display;
-            if (metaDisplay && typeof metaDisplay.get_selection === 'function') {
-                const selection = metaDisplay.get_selection();
-                this._setupSelectionTracking(selection);
-            }
-        }
-
-        _setupSelectionTracking(selection) {
-            this.selection = selection;
-            this._selectionOwnerChangedId = selection.connect('owner-changed', (selection, selectionType, selectionSource) => {
-                this._onSelectionChange(selection, selectionType, selectionSource);
-            });
-        }
-
-        _getDoubleCopyWindowUs() {
-            // Live-read so dconf/prefs changes apply without reload.
-            // Falls back to 500ms when the key is missing
-            // (e.g. old compiled schema still installed).
-            let ms = DOUBLE_COPY_DELAY_FALLBACK_MS;
-            try {
-                ms = this._settings.get_int('double-copy-delay');
-            } catch (e) {
-                ms = DOUBLE_COPY_DELAY_FALLBACK_MS;
-            }
-            if (!Number.isFinite(ms)) ms = DOUBLE_COPY_DELAY_FALLBACK_MS;
-            ms = Math.max(DOUBLE_COPY_DELAY_MIN_MS, Math.min(DOUBLE_COPY_DELAY_MAX_MS, ms));
-            return ms * 1000;
-        }
-
-        _onSelectionChange(_a, selectionType, _b) {
-            if (selectionType !== Meta.SelectionType.SELECTION_CLIPBOARD) return;
-            if (this._isInternalCopy) {
-                this._isInternalCopy = false;
-                if (this._internalCopyTimeoutId) {
-                    GLib.Source.remove(this._internalCopyTimeoutId);
-                    this._internalCopyTimeoutId = null;
-                }
-                return;
-            }
-
-            // Don't inspect clipboard unless double-copy gesture is enabled.
-            const doubleCopyEnabled = this._settings.get_boolean('double-copy-enabled');
-            if (!doubleCopyEnabled) {
-                return;
-            }
-
-            const eventArrivalUs = GLib.get_monotonic_time();
-            // Suppress rapid signal echoes (< 180ms) from XWayland / GTK target negotiation.
-            if (this._lastEventArrivalUs && (eventArrivalUs - this._lastEventArrivalUs) < DOUBLE_COPY_MIN_US) {
-                return;
-            }
-            this._lastEventArrivalUs = eventArrivalUs;
-
-            getClipboard().get_text(CLIPBOARD_TYPE, (_, text) => {
-                if (this._destroyed) {
-                    return;
-                }
-                if (!text || text.trim() === '') return;
-
-                if (this._lastClipboardTime && this._lastClipboardText !== null) {
-                    let diff = eventArrivalUs - this._lastClipboardTime;
-                    // Trigger only if same content AND within the detection window.
-                    // Identical content means the user copied the same selection twice.
-                    if (diff >= DOUBLE_COPY_MIN_US && diff < this._getDoubleCopyWindowUs() && text === this._lastClipboardText) {
-                        this._lastClipboardText = null; // consume — triple-copy won't re-trigger
-                        this._lastClipboardTime = null;
-                        this._lastEventArrivalUs = null;
-                        this._triggerFloatingTranslation(text);
-                        return;
-                    }
-                }
-
-                this._lastClipboardTime = eventArrivalUs;
-                this._lastClipboardText = text;
-            });
-        }
-
-        _clearClipboardTimeout() {
-            if (!this._clipboardTimeoutId) {
-                return;
-            }
-
-            GLib.Source.remove(this._clipboardTimeoutId);
-            this._clipboardTimeoutId = null;
-        }
-
-        _disconnectSelectionListener() {
-            if (!this._selectionOwnerChangedId || !this.selection) {
-                return;
-            }
-
-            this.selection.disconnect(this._selectionOwnerChangedId);
-            this._selectionOwnerChangedId = null;
         }
 
         _disconnectSettings() {
@@ -553,6 +451,10 @@ var FastTranslate = GObject.registerClass(
                 this.inputEntry.disconnect(this._inputBtnPressId);
                 this._inputBtnPressId = null;
             }
+            if (this.inputEntry && this._inputKeyPressId) {
+                this.inputEntry.get_clutter_text().disconnect(this._inputKeyPressId);
+                this._inputKeyPressId = null;
+            }
             if (this.inputEntry && this._inputTextChangedId) {
                 this.inputEntry.get_clutter_text().disconnect(this._inputTextChangedId);
                 this._inputTextChangedId = null;
@@ -606,21 +508,147 @@ var FastTranslate = GObject.registerClass(
                 this._settings,
                 Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
                 Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
-                () => {
-                    // User-initiated read: explicit shortcut action.
-                    getClipboard().get_text(CLIPBOARD_TYPE, (_, fromText) => {
-                        if (this._destroyed) {
-                            return;
-                        }
-                        if (fromText && fromText !== "") {
-                            this.inputEntry.get_clutter_text().set_text(fromText);
-                            this._triggerTranslation();
-                            this.menu.open();
-                        }
-                    });
-                }
+                () => this._translateClipboardShortcut()
             );
             this._shortcutBound = true;
+        }
+
+        _translateClipboardShortcut() {
+            this._copySelectionForQuickTranslate((selectedText) => {
+                if (this._destroyed || !selectedText || selectedText.trim() === "") {
+                    return;
+                }
+                this._triggerFloatingTranslation(selectedText);
+            });
+        }
+
+        _copySelectionForQuickTranslate(callback) {
+            this._cancelQuickCopy();
+            const generation = this._quickCopyGeneration;
+
+            // Snapshot the current clipboard so a failed Ctrl+C never
+            // translates stale content from an earlier copy operation.
+            getClipboard().get_text(CLIPBOARD_TYPE, (_, previousText) => {
+                if (this._destroyed || generation !== this._quickCopyGeneration) {
+                    return;
+                }
+
+                this._quickCopyPreviousText = previousText || null;
+                this._quickCopySelection = global.display.get_selection();
+                this._quickCopyOwnerChangedId = this._quickCopySelection.connect(
+                    'owner-changed', (_selection, selectionType, selectionSource) => {
+                        if (!this._quickCopyInjected || !selectionSource ||
+                            selectionType !== Meta.SelectionType.SELECTION_CLIPBOARD) {
+                            return;
+                        }
+                        this._readQuickCopyResult(callback, true);
+                    }
+                );
+
+                const startedUs = GLib.get_monotonic_time();
+                this._quickCopyWaitId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, QUICK_COPY_POLL_MS, () => {
+                    if (this._destroyed) {
+                        this._quickCopyWaitId = null;
+                        return GLib.SOURCE_REMOVE;
+                    }
+
+                    const [, , modifiers] = global.get_pointer();
+                    const elapsedMs = (GLib.get_monotonic_time() - startedUs) / 1000;
+                    if ((modifiers & SHORTCUT_MODIFIER_MASK) !== 0) {
+                        if (elapsedMs < QUICK_COPY_RELEASE_TIMEOUT_MS) {
+                            return GLib.SOURCE_CONTINUE;
+                        }
+                        this._quickCopyWaitId = null;
+                        this._cancelQuickCopy();
+                        Main.notify("Fast Translate", _("Release the shortcut keys and try again"));
+                        return GLib.SOURCE_REMOVE;
+                    }
+
+                    this._quickCopyWaitId = null;
+                    this._quickCopyInjected = true;
+                    if (!this._sendVirtualCopyShortcut()) {
+                        this._cancelQuickCopy();
+                        Main.notify("Fast Translate", _("Could not copy the selected text"));
+                        return GLib.SOURCE_REMOVE;
+                    }
+                    if (!this._quickCopyInjected) {
+                        return GLib.SOURCE_REMOVE;
+                    }
+
+                    this._quickCopyFallbackId = GLib.timeout_add(
+                        GLib.PRIORITY_DEFAULT,
+                        QUICK_COPY_CLIPBOARD_TIMEOUT_MS,
+                        () => {
+                            this._quickCopyFallbackId = null;
+                            this._readQuickCopyResult(callback, false);
+                            return GLib.SOURCE_REMOVE;
+                        }
+                    );
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+        }
+
+        _sendVirtualCopyShortcut() {
+            try {
+                if (!this._virtualKeyboard) {
+                    const seat = Clutter.get_default_backend().get_default_seat();
+                    this._virtualKeyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+                }
+
+                const pressed = Clutter.KeyState.PRESSED;
+                const released = Clutter.KeyState.RELEASED;
+                let timeUs = GLib.get_monotonic_time();
+                this._virtualKeyboard.notify_keyval(timeUs, Clutter.KEY_Control_L, pressed);
+                this._virtualKeyboard.notify_keyval(timeUs + 1000, Clutter.KEY_c, pressed);
+                this._virtualKeyboard.notify_keyval(timeUs + 2000, Clutter.KEY_c, released);
+                this._virtualKeyboard.notify_keyval(timeUs + 3000, Clutter.KEY_Control_L, released);
+                return true;
+            } catch (e) {
+                console.error(`Fast Translate: virtual Ctrl+C failed: ${e.message || e}`);
+                this._virtualKeyboard = null;
+                return false;
+            }
+        }
+
+        _readQuickCopyResult(callback, ownerChanged) {
+            getClipboard().get_text(CLIPBOARD_TYPE, (_, selectedText) => {
+                if (this._destroyed || !this._quickCopyInjected) {
+                    return;
+                }
+
+                const hasText = !!selectedText && selectedText.trim() !== "";
+                const changed = selectedText !== this._quickCopyPreviousText;
+                if (!hasText || (!ownerChanged && !changed)) {
+                    if (!ownerChanged) {
+                        this._cancelQuickCopy();
+                        Main.notify("Fast Translate", _("Select text and try again"));
+                    }
+                    return;
+                }
+
+                this._cancelQuickCopy();
+                callback(selectedText);
+            });
+        }
+
+        _cancelQuickCopy() {
+            this._quickCopyGeneration++;
+            if (this._quickCopyWaitId) {
+                GLib.Source.remove(this._quickCopyWaitId);
+                this._quickCopyWaitId = null;
+            }
+            if (this._quickCopyFallbackId) {
+                GLib.Source.remove(this._quickCopyFallbackId);
+                this._quickCopyFallbackId = null;
+            }
+            if (this._quickCopyOwnerChangedId && this._quickCopySelection) {
+                this._quickCopySelection.disconnect(this._quickCopyOwnerChangedId);
+            }
+            this._quickCopyOwnerChangedId = null;
+            this._quickCopySelection = null;
+            this._quickCopyInjected = false;
+            this._quickCopyPreviousText = null;
         }
 
         _unbindShortcut() {
@@ -999,19 +1027,52 @@ var FastTranslate = GObject.registerClass(
             return parseCountryCode(description) || 'AUTO';
         }
 
-        _copyToClipboard(inText) {
-            this._isInternalCopy = true;
-            if (this._internalCopyTimeoutId) {
-                GLib.Source.remove(this._internalCopyTimeoutId);
+        _queueAutoTranslation() {
+            if (this._typingDebounceId) {
+                GLib.Source.remove(this._typingDebounceId);
+                this._typingDebounceId = null;
             }
-            this._internalCopyTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                this._isInternalCopy = false;
-                this._internalCopyTimeoutId = null;
+            if (!this.autoTranslateSwitch || this.autoTranslateSwitch.state !== true) {
+                return;
+            }
+
+            this._typingDebounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
+                this._typingDebounceId = null;
+                if (this._destroyed) {
+                    return GLib.SOURCE_REMOVE;
+                }
+                if (this.autoTranslateSwitch.state === true) {
+                    this._triggerTranslation();
+                }
                 return GLib.SOURCE_REMOVE;
             });
+        }
 
-            // The _isInternalCopy guard above already suppresses the
-            // owner-changed feedback loop; write unconditionally.
+        _replaceInputFromClipboard() {
+            getClipboard().get_text(CLIPBOARD_TYPE, (_, text) => {
+                if (this._destroyed || !text) {
+                    return;
+                }
+                this.inputEntry.get_clutter_text().set_text(text);
+                // set_text() may not emit when the clipboard matches the current
+                // value, so explicitly re-arm the single debounced translation.
+                this._queueAutoTranslation();
+            });
+        }
+
+        _pasteClipboardAtCursor() {
+            getClipboard().get_text(CLIPBOARD_TYPE, (_, text) => {
+                if (this._destroyed || !text) {
+                    return;
+                }
+                const clutterText = this.inputEntry.get_clutter_text();
+                clutterText.delete_selection();
+                const position = clutterText.get_cursor_position();
+                clutterText.insert_text(text, position);
+            });
+        }
+
+        _copyToClipboard(inText) {
             getClipboard().set_text(CLIPBOARD_TYPE, inText);
         }
 
@@ -1128,26 +1189,22 @@ var FastTranslate = GObject.registerClass(
                 global.stage.set_key_focus(this.inputEntry.get_clutter_text());
                 return Clutter.EVENT_PROPAGATE;
             });
+            this._inputKeyPressId = this.inputEntry.get_clutter_text().connect('key-press-event', (_actor, event) => {
+                const symbol = event.get_key_symbol();
+                const state = event.get_state();
+                const isCtrlV = (state & Clutter.ModifierType.CONTROL_MASK) !== 0 &&
+                    (symbol === Clutter.KEY_v || symbol === Clutter.KEY_V);
+                if (!isCtrlV) {
+                    return Clutter.EVENT_PROPAGATE;
+                }
+
+                this._pasteClipboardAtCursor();
+                return Clutter.EVENT_STOP;
+            });
             // Auto-translate while typing (debounced). Only acts while the
             // "Auto Translate" switch is ON; _triggerTranslation no-ops on empty.
             this._inputTextChangedId = this.inputEntry.get_clutter_text().connect('text-changed', () => {
-                if (this._typingDebounceId) {
-                    GLib.Source.remove(this._typingDebounceId);
-                    this._typingDebounceId = null;
-                }
-                if (!this.autoTranslateSwitch || this.autoTranslateSwitch.state !== true) {
-                    return;
-                }
-                this._typingDebounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
-                    this._typingDebounceId = null;
-                    if (this._destroyed) {
-                        return GLib.SOURCE_REMOVE;
-                    }
-                    if (this.autoTranslateSwitch.state === true) {
-                        this._triggerTranslation();
-                    }
-                    return GLib.SOURCE_REMOVE;
-                });
+                this._queueAutoTranslation();
             });
             inputScrollBox.add_child(this.inputEntry);
             inputScroll.add_child(inputScrollBox);
@@ -1168,17 +1225,7 @@ var FastTranslate = GObject.registerClass(
             }));
             this._pasteBtnClickedId = this.pasteBtn.connect('clicked', () => {
                 // User-initiated read: explicit Paste button press.
-                getClipboard().get_text(CLIPBOARD_TYPE, (_, inText) => {
-                    if (this._destroyed) {
-                        return;
-                    }
-                    if (inText && inText !== "") {
-                        this.inputEntry.get_clutter_text().set_text(inText);
-                        if (this.autoTranslateSwitch.state === true) {
-                            this._triggerTranslation();
-                        }
-                    }
-                });
+                this._replaceInputFromClipboard();
             });
             this.clearBtn = new St.Button({
                 style_class: 'translate-action-btn',
@@ -1495,8 +1542,8 @@ var FastTranslate = GObject.registerClass(
             this._disconnectSettings();
             this._disconnectInterfaceSettings();
             this._unbindShortcut();
-            this._clearClipboardTimeout();
-            this._disconnectSelectionListener();
+            this._cancelQuickCopy();
+            this._virtualKeyboard = null;
             if (this._cancellable) {
                 try {
                     this._cancellable.cancel();
@@ -1504,10 +1551,6 @@ var FastTranslate = GObject.registerClass(
                     // Already cancelled/finished; ignore.
                 }
                 this._cancellable = null;
-            }
-            if (this._internalCopyTimeoutId) {
-                GLib.Source.remove(this._internalCopyTimeoutId);
-                this._internalCopyTimeoutId = null;
             }
             if (this._httpSession) {
                 this._httpSession.abort();
