@@ -22,8 +22,7 @@ global.testRunnerPromise = (async () => {
         if (!TOUCHED_KEYS || TOUCHED_KEYS.length === 0) {
             TOUCHED_KEYS = ['translation-service', 'source-lang', 'target-lang',
                 'url', 'apikey', 'floating-auto-copy', 'floating-background-mode',
-                'floating-background-toast', 'double-copy-enabled', 'double-copy-delay',
-                'auto-paste', 'auto-translate', 'auto-copy',
+                'floating-background-toast', 'auto-paste', 'auto-translate', 'auto-copy',
                 'keybinding-translate-clipboard', 'notifications'];
         }
         const _settingsSnapshot = {};
@@ -49,7 +48,6 @@ global.testRunnerPromise = (async () => {
         // not live values). Safe-default contract EGO reviewers check first.
         const _def = (k) => indicator._settings.get_default_value(k).unpack();
         const _safeDefaults = [
-            ['double-copy-enabled', false],
             ['auto-paste', false],
             ['auto-copy', false],
             ['auto-translate', false],
@@ -71,15 +69,10 @@ global.testRunnerPromise = (async () => {
             _restoreSettingsSnapshot();
             return { success: false, error: 'Unsafe ship-state default: url=' + JSON.stringify(_def('url')) + ', must use https://' };
         }
-        const _delayDef = _def('double-copy-delay');
-        if (typeof _delayDef !== 'number' || _delayDef < 300 || _delayDef > 5000) {
-            _restoreSettingsSnapshot();
-            return { success: false, error: 'Unsafe ship-state default: double-copy-delay=' + JSON.stringify(_delayDef) + ', must be 300-5000' };
-        }
         const _kbDef = _def('keybinding-translate-clipboard');
-        if (!Array.isArray(_kbDef) || _kbDef.length !== 0) {
+        if (!Array.isArray(_kbDef) || _kbDef.length !== 1 || _kbDef[0] !== '<Control><Alt>e') {
             _restoreSettingsSnapshot();
-            return { success: false, error: 'Unsafe ship-state default: keybinding-translate-clipboard=' + JSON.stringify(_kbDef) + ', must ship empty' };
+            return { success: false, error: 'Unexpected default shortcut: ' + JSON.stringify(_kbDef) };
         }
 
         // Test 1: Verify elements exist
@@ -396,597 +389,239 @@ global.testRunnerPromise = (async () => {
             return { success: false, error: "Failed to instantiate FloatingTranslationWindow: " + e.message };
         }
 
-        // Test 8: Double-copy shortcut simulation
-        const St = imports.gi.St;
-        const Meta = imports.gi.Meta;
-        const GLib = imports.gi.GLib;
-        const Clipboard = St.Clipboard.get_default();
-
-        const originalGetMonotonicTime = GLib.get_monotonic_time;
-        let mockTime = 1000000;
-        GLib.get_monotonic_time = function() {
-            return mockTime;
-        };
-
-        const originalClipboardGetText = Clipboard.get_text;
-        const originalClipboardSetText = Clipboard.set_text;
-        let mockClipboardText = "";
-
-        // Mock clipboard get_text to return our mock text
-        Clipboard.get_text = function(type, callback) {
-            callback(Clipboard, mockClipboardText);
-        };
-
-        // Mock _translateTextIndependent to avoid real HTTP requests
-        const originalTranslateTextIndependent = indicator._translateTextIndependent;
-        let independentTranslationText = "";
-        let independentTranslationCallback = null;
-        indicator._translateTextIndependent = function(fromText, callback) {
-            independentTranslationText = fromText;
-            independentTranslationCallback = callback;
-        };
-
+        // Test 8: Quick Translate copies the active selection and routes it
+        // to the floating/background translation pipeline.
         try {
-            // Reset state so startup events don't bleed into this test
-            indicator._lastEventArrivalUs = null;
-            indicator._lastClipboardTime = null;
-            indicator._lastClipboardText = null;
-            if (indicator._internalCopyTimeoutId) {
-                GLib.Source.remove(indicator._internalCopyTimeoutId);
-                indicator._internalCopyTimeoutId = null;
+            const originalCopySelection = indicator._copySelectionForQuickTranslate;
+            const originalTriggerFloating = indicator._triggerFloatingTranslation;
+            let mockSelectedText = "Quick Translate input";
+            let triggeredText = null;
+
+            indicator._copySelectionForQuickTranslate = function(callback) {
+                callback(mockSelectedText);
+            };
+            indicator._triggerFloatingTranslation = function(text) {
+                triggeredText = text;
+            };
+
+            try {
+                indicator._translateClipboardShortcut();
+                if (triggeredText !== "Quick Translate input") {
+                    return { success: false, error: "Quick Translate did not route clipboard text to the popup pipeline" };
+                }
+
+                triggeredText = null;
+                mockSelectedText = "   ";
+                indicator._translateClipboardShortcut();
+                if (triggeredText !== null) {
+                    return { success: false, error: "Quick Translate must ignore an empty selection" };
+                }
+            } finally {
+                indicator._copySelectionForQuickTranslate = originalCopySelection;
+                indicator._triggerFloatingTranslation = originalTriggerFloating;
             }
-            indicator._isInternalCopy = false;
-            indicator._settings.set_boolean('floating-auto-copy', false);
-            indicator._settings.set_boolean('floating-background-mode', false);
-            indicator._settings.set_boolean('floating-background-toast', true);
-            // Gesture harness: Test 0 resets to ship-state (gesture OFF), so
-            // each double-copy test must opt in explicitly.
-            indicator._settings.set_boolean('double-copy-enabled', true);
-            if (indicator._floatingWindow) {
-                indicator._floatingWindow.destroy();
-                indicator._floatingWindow = null;
+        } catch (e) {
+            return { success: false, error: "Quick Translate shortcut test failed: " + (e.message || String(e)) };
+        }
+
+        // Test 8a: virtual Ctrl+C is emitted in the exact press/release order.
+        try {
+            const Clutter = imports.gi.Clutter;
+            const originalVirtualKeyboard = indicator._virtualKeyboard;
+            const events = [];
+            indicator._virtualKeyboard = {
+                notify_keyval: (time, keyval, state) => events.push([keyval, state]),
+            };
+            try {
+                if (!indicator._sendVirtualCopyShortcut()) {
+                    return { success: false, error: "Virtual Ctrl+C helper reported failure" };
+                }
+                const expected = [
+                    [Clutter.KEY_Control_L, Clutter.KeyState.PRESSED],
+                    [Clutter.KEY_c, Clutter.KeyState.PRESSED],
+                    [Clutter.KEY_c, Clutter.KeyState.RELEASED],
+                    [Clutter.KEY_Control_L, Clutter.KeyState.RELEASED],
+                ];
+                if (JSON.stringify(events) !== JSON.stringify(expected)) {
+                    return { success: false, error: "Virtual Ctrl+C event order is incorrect: " + JSON.stringify(events) };
+                }
+            } finally {
+                indicator._virtualKeyboard = originalVirtualKeyboard;
             }
+        } catch (e) {
+            return { success: false, error: "Virtual Ctrl+C test failed: " + (e.message || String(e)) };
+        }
 
-            // First copy
-            mockTime = 1000000;
-            mockClipboardText = "Double Copy Test input text";
-            indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
+        // Test 8b: clipboard insertion helpers preserve the distinct button
+        // (replace all) and Ctrl+V (replace selection / insert at cursor) semantics.
+        try {
+            const St = imports.gi.St;
+            const Clipboard = St.Clipboard.get_default();
+            const originalGetText = Clipboard.get_text;
+            let mockClipboardText = "Replacement text";
 
-            // Check that the floating window is NOT created yet
-            if (indicator._floatingWindow) {
-                GLib.get_monotonic_time = originalGetMonotonicTime;
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Floating window was created on a single copy!" };
+            Clipboard.get_text = function(type, callback) {
+                callback(Clipboard, mockClipboardText);
+            };
+
+            try {
+                const textActor = indicator.inputEntry.get_clutter_text();
+                const originalAutoTranslate = indicator.autoTranslateSwitch.state;
+                indicator.autoTranslateSwitch.setToggleState(false);
+                try {
+                    textActor.set_text("Old text");
+                    indicator._replaceInputFromClipboard();
+                    if (textActor.get_text() !== "Replacement text") {
+                        return { success: false, error: "Paste button helper did not replace the input" };
+                    }
+
+                    textActor.set_text("Hello world");
+                    textActor.set_selection(6, 11);
+                    mockClipboardText = "GNOME";
+                    indicator._pasteClipboardAtCursor();
+                    if (textActor.get_text() !== "Hello GNOME") {
+                        return { success: false, error: "Ctrl+V helper did not replace the selected text" };
+                    }
+
+                    textActor.set_cursor_position(-1);
+                    mockClipboardText = "!";
+                    indicator._pasteClipboardAtCursor();
+                    if (textActor.get_text() !== "Hello GNOME!") {
+                        return { success: false, error: "Ctrl+V helper did not insert at the cursor" };
+                    }
+                } finally {
+                    indicator.autoTranslateSwitch.setToggleState(originalAutoTranslate);
+                }
+            } finally {
+                Clipboard.get_text = originalGetText;
             }
+        } catch (e) {
+            return { success: false, error: "Clipboard insertion test failed: " + (e.message || String(e)) };
+        }
 
-            // Simulate spurious duplicate signal (10ms and 100ms later) — same content, must NOT trigger
-            mockTime = 1010000;
-            indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-            mockTime = 1100000;
-            indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
+        // Test 8c: opening the panel reads the clipboard only when Auto Paste
+        // is enabled, and Auto Translate schedules exactly one request.
+        try {
+            const St = imports.gi.St;
+            const GLib = imports.gi.GLib;
+            const Clipboard = St.Clipboard.get_default();
+            const originalGetText = Clipboard.get_text;
+            const originalTrigger = indicator._triggerTranslation;
+            const originalAutoPaste = indicator.autoPasteSwitch.state;
+            const originalAutoTranslate = indicator.autoTranslateSwitch.state;
+            let readCount = 0;
+            let triggerCount = 0;
 
-            if (independentTranslationCallback) {
-                GLib.get_monotonic_time = originalGetMonotonicTime;
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Spurious duplicate signal (<180ms) triggered translation!" };
+            Clipboard.get_text = function(type, callback) {
+                readCount++;
+                callback(Clipboard, "Panel clipboard text");
+            };
+            indicator._triggerTranslation = function() {
+                triggerCount++;
+            };
+
+            try {
+                indicator.menu.close();
+                indicator.autoPasteSwitch.setToggleState(false);
+                indicator.autoTranslateSwitch.setToggleState(false);
+                indicator.menu.open();
+                if (readCount !== 0) {
+                    return { success: false, error: "Panel read the clipboard while Auto Paste was disabled" };
+                }
+                indicator.menu.close();
+
+                indicator.autoPasteSwitch.setToggleState(true);
+                indicator.menu.open();
+                if (readCount !== 1 || indicator.inputEntry.get_clutter_text().get_text() !== "Panel clipboard text") {
+                    return { success: false, error: "Auto Paste did not fill the panel input" };
+                }
+                indicator.menu.close();
+
+                indicator.autoTranslateSwitch.setToggleState(true);
+                indicator.menu.open();
+                await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 800, () => {
+                    resolve();
+                    return GLib.SOURCE_REMOVE;
+                }));
+                if (triggerCount !== 1) {
+                    return { success: false, error: "Panel Auto Paste/Auto Translate expected 1 request, got " + triggerCount };
+                }
+            } finally {
+                indicator.menu.close();
+                Clipboard.get_text = originalGetText;
+                indicator._triggerTranslation = originalTrigger;
+                indicator.autoPasteSwitch.setToggleState(originalAutoPaste);
+                indicator.autoTranslateSwitch.setToggleState(originalAutoTranslate);
+                if (indicator._typingDebounceId) {
+                    GLib.Source.remove(indicator._typingDebounceId);
+                    indicator._typingDebounceId = null;
+                }
             }
+        } catch (e) {
+            return { success: false, error: "Panel clipboard behavior test failed: " + (e.message || String(e)) };
+        }
 
-            // Second intentional copy — same content, 250ms after first — must trigger
-            mockTime = 1250000;
-            indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
+        // Test 8d: Quick Translate keeps the visible popup, auto-copy, and
+        // background-copy modes that were previously used by the old gesture.
+        try {
+            const St = imports.gi.St;
+            const Clipboard = St.Clipboard.get_default();
+            const originalSetText = Clipboard.set_text;
+            const originalTranslateIndependent = indicator._translateTextIndependent;
+            const originalBackground = indicator._settings.get_boolean('floating-background-mode');
+            const originalToast = indicator._settings.get_boolean('floating-background-toast');
+            const originalAutoCopy = indicator._settings.get_boolean('floating-auto-copy');
+            let copiedText = null;
 
-            // Verify that _translateTextIndependent was triggered
-            if (independentTranslationText !== "Double Copy Test input text" || !independentTranslationCallback) {
-                GLib.get_monotonic_time = originalGetMonotonicTime;
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Double-copy did not trigger independent translation!" };
-            }
-
-            // Call the callback to simulate translation completing
-            independentTranslationCallback("Double Copy Test translated text");
-
-            // Verify floating window is created
-            if (!indicator._floatingWindow) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Floating window was not created after double copy translation completed!" };
-            }
-
-            // Verify contents of the floating window
-            let floatWin = indicator._floatingWindow;
-            if (!floatWin.actor || !floatWin.overlay) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Floating window structure is invalid!" };
-            }
-
-            // Verify children layout and close button click
-            let children = floatWin.actor.get_children();
-            if (children.length < 6) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Floating window actor has insufficient children: " + children.length };
-            }
-
-            let closeBtn = children[0].get_children()[1];
-            if (!(closeBtn instanceof St.Button)) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Close button not found at expected layout position" };
-            }
-
-            // Verify copy button copies the text and destroys the window
-            let copyBtn = children[5].get_children()[0];
-            if (!(copyBtn instanceof St.Button)) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Copy button not found at expected layout position" };
-            }
-
-            let copiedText = "";
             Clipboard.set_text = function(type, text) {
                 copiedText = text;
             };
+            indicator._translateTextIndependent = function(fromText, callback) {
+                callback("Translated result");
+            };
 
-            copyBtn.emit('clicked', 0);
-            if (copiedText !== "Double Copy Test translated text") {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Copy button did not copy targetText! Got: " + copiedText };
-            }
-
-            if (indicator._floatingWindow) {
-                Clipboard.get_text = originalClipboardGetText;
-                Clipboard.set_text = originalClipboardSetText;
-                indicator._translateTextIndependent = originalTranslateTextIndependent;
-                return { success: false, error: "Floating window was not destroyed after clicking Copy button!" };
-            }
-
-            // Test 8b: Auto Copy functionality for Double-copy
-            const originalAutoCopyState = indicator._settings.get_boolean('floating-auto-copy');
-            indicator._settings.set_boolean('floating-auto-copy', true);
-            indicator._settings.set_boolean('double-copy-enabled', true);
             try {
-                let autoCopiedText = "";
-                Clipboard.set_text = function(type, text) {
-                    autoCopiedText = text;
-                };
-
-                // Reset state for clean double-copy sequence
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                if (indicator._internalCopyTimeoutId) {
-                    GLib.Source.remove(indicator._internalCopyTimeoutId);
-                    indicator._internalCopyTimeoutId = null;
+                indicator._settings.set_boolean('floating-background-mode', false);
+                indicator._settings.set_boolean('floating-auto-copy', false);
+                indicator._triggerFloatingTranslation("Visible popup source");
+                if (!indicator._floatingWindow) {
+                    return { success: false, error: "Quick Translate did not create the visible popup" };
                 }
-                indicator._isInternalCopy = false;
-                independentTranslationCallback = null;
-                independentTranslationText = "";
+                indicator._floatingWindow.destroy();
+                indicator._floatingWindow = null;
 
-                // Trigger double copy flow
-                mockClipboardText = "Auto Copy Test input text";
-                mockTime = 2000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 1st
-                mockTime = 2200000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 2nd (same text → triggers)
-
-                if (!independentTranslationCallback) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    return { success: false, error: "Auto-copy test did not trigger independent translation callback!" };
+                copiedText = null;
+                indicator._settings.set_boolean('floating-auto-copy', true);
+                indicator._triggerFloatingTranslation("Auto-copy source");
+                if (!indicator._floatingWindow || copiedText !== "Translated result") {
+                    return { success: false, error: "Visible Quick Translate auto-copy failed" };
                 }
+                indicator._floatingWindow.destroy();
+                indicator._floatingWindow = null;
 
-                // Simulate translation completing
-                independentTranslationCallback("Auto Copy Test translated text");
-
-                // Verify that it auto-copied to clipboard immediately without clicking the copy button
-                if (autoCopiedText !== "Auto Copy Test translated text") {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    return { success: false, error: "Auto-copy failed to automatically copy translated text! Got: " + autoCopiedText };
+                copiedText = null;
+                indicator._settings.set_boolean('floating-background-mode', true);
+                indicator._settings.set_boolean('floating-background-toast', false);
+                indicator._triggerFloatingTranslation("Background source");
+                if (indicator._floatingWindow || copiedText !== "Translated result") {
+                    return { success: false, error: "Background Quick Translate did not copy silently" };
                 }
-
-                // Clean up the spawned window
+            } finally {
+                Clipboard.set_text = originalSetText;
+                indicator._translateTextIndependent = originalTranslateIndependent;
+                indicator._settings.set_boolean('floating-background-mode', originalBackground);
+                indicator._settings.set_boolean('floating-background-toast', originalToast);
+                indicator._settings.set_boolean('floating-auto-copy', originalAutoCopy);
                 if (indicator._floatingWindow) {
                     indicator._floatingWindow.destroy();
                     indicator._floatingWindow = null;
                 }
-            } finally {
-                indicator._settings.set_boolean('floating-auto-copy', originalAutoCopyState);
-            }
-
-            // Test 8c: Double-copy in background mode with toast enabled
-            const originalBgMode = indicator._settings.get_boolean('floating-background-mode');
-            const originalBgToast = indicator._settings.get_boolean('floating-background-toast');
-            indicator._settings.set_boolean('floating-background-mode', true);
-            indicator._settings.set_boolean('floating-background-toast', true);
-            indicator._settings.set_boolean('double-copy-enabled', true);
-
-            const MessageTray = await import("resource:///org/gnome/shell/ui/messageTray.js");
-            const originalAddNotification = MessageTray.Source.prototype.addNotification;
-            let notifyTitle = null;
-            let notifyBody = null;
-            let notifyCalled = false;
-            MessageTray.Source.prototype.addNotification = function(notification) {
-                notifyCalled = true;
-                notifyTitle = notification.title;
-                notifyBody = notification.body;
-            };
-
-            try {
-                let bgCopiedText = "";
-                Clipboard.set_text = function(type, text) {
-                    bgCopiedText = text;
-                };
-
-                // Reset state
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                if (indicator._internalCopyTimeoutId) {
-                    GLib.Source.remove(indicator._internalCopyTimeoutId);
-                    indicator._internalCopyTimeoutId = null;
-                }
-                indicator._isInternalCopy = false;
-                independentTranslationCallback = null;
-                independentTranslationText = "";
-
-                // Trigger double copy
-                mockClipboardText = "Bg Mode Toast input text";
-                mockTime = 3000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 1st
-                mockTime = 3200000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 2nd
-
-                if (!independentTranslationCallback) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode Toast test did not trigger translation callback!" };
-                }
-
-                // Simulate translation completing
-                independentTranslationCallback("Bg Mode Toast translated text");
-
-                // Verify that:
-                // 1. Floating window was NOT created
-                if (indicator._floatingWindow) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Floating window was created in background mode!" };
-                }
-
-                // 2. Translated text was copied to clipboard
-                if (bgCopiedText !== "Bg Mode Toast translated text") {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode Toast test failed to copy translation to clipboard! Got: " + bgCopiedText };
-                }
-
-                // 3. Notification was shown
-                if (!notifyCalled || !notifyTitle || notifyBody !== "Bg Mode Toast input text → Bg Mode Toast translated text") {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode Toast notification not shown or content incorrect! Got: " + notifyBody };
-                }
-            } finally {
-                MessageTray.Source.prototype.addNotification = originalAddNotification;
-                indicator._settings.set_boolean('floating-background-mode', originalBgMode);
-                indicator._settings.set_boolean('floating-background-toast', originalBgToast);
-            }
-
-            // Test 8d: Double-copy in background mode with toast disabled
-            const originalBgModeD = indicator._settings.get_boolean('floating-background-mode');
-            const originalBgToastD = indicator._settings.get_boolean('floating-background-toast');
-            indicator._settings.set_boolean('floating-background-mode', true);
-            indicator._settings.set_boolean('floating-background-toast', false);
-            indicator._settings.set_boolean('double-copy-enabled', true);
-
-            let notifyCalledD = false;
-            MessageTray.Source.prototype.addNotification = function(notification) {
-                notifyCalledD = true;
-            };
-
-            try {
-                let bgCopiedText = "";
-                Clipboard.set_text = function(type, text) {
-                    bgCopiedText = text;
-                };
-
-                // Reset state
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                if (indicator._internalCopyTimeoutId) {
-                    GLib.Source.remove(indicator._internalCopyTimeoutId);
-                    indicator._internalCopyTimeoutId = null;
-                }
-                indicator._isInternalCopy = false;
-                independentTranslationCallback = null;
-                independentTranslationText = "";
-
-                // Trigger double copy
-                mockClipboardText = "Bg Mode No Toast input text";
-                mockTime = 4000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 1st
-                mockTime = 4200000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null); // 2nd
-
-                if (!independentTranslationCallback) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode No Toast test did not trigger translation callback!" };
-                }
-
-                // Simulate translation completing
-                independentTranslationCallback("Bg Mode No Toast translated text");
-
-                // Verify that:
-                // 1. Floating window was NOT created
-                if (indicator._floatingWindow) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Floating window was created in background mode (no toast)!" };
-                }
-
-                // 2. Translated text was copied to clipboard
-                if (bgCopiedText !== "Bg Mode No Toast translated text") {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode No Toast test failed to copy translation! Got: " + bgCopiedText };
-                }
-
-                // 3. Notification was NOT shown
-                if (notifyCalledD) {
-                    Clipboard.get_text = originalClipboardGetText;
-                    Clipboard.set_text = originalClipboardSetText;
-                    indicator._translateTextIndependent = originalTranslateTextIndependent;
-                    MessageTray.Source.prototype.addNotification = originalAddNotification;
-                    return { success: false, error: "Bg Mode notification was shown even though toast option is disabled!" };
-                }
-            } finally {
-                MessageTray.Source.prototype.addNotification = originalAddNotification;
-                indicator._settings.set_boolean('floating-background-mode', originalBgModeD);
-                indicator._settings.set_boolean('floating-background-toast', originalBgToastD);
-            }
-
-        } catch (e) {
-            GLib.get_monotonic_time = originalGetMonotonicTime;
-            Clipboard.get_text = originalClipboardGetText;
-            Clipboard.set_text = originalClipboardSetText;
-            indicator._translateTextIndependent = originalTranslateTextIndependent;
-            if (indicator._floatingWindow) {
-                indicator._floatingWindow.destroy();
-                indicator._floatingWindow = null;
-            }
-            return { success: false, error: "Double-copy shortcut test failed: " + e.message };
-        } finally {
-            GLib.get_monotonic_time = originalGetMonotonicTime;
-            Clipboard.get_text = originalClipboardGetText;
-            Clipboard.set_text = originalClipboardSetText;
-            indicator._translateTextIndependent = originalTranslateTextIndependent;
-        }
-
-        // Test 8e: P0 gate — gesture OFF + auto-paste OFF → no clipboard read at all.
-        // Regression test: system-wide copies must never be inspected when disarmed.
-        try {
-            const Meta = imports.gi.Meta;
-            const St = imports.gi.St;
-            const Clipboard = St.Clipboard.get_default();
-
-            const origGesture = indicator._settings.get_boolean('double-copy-enabled');
-            indicator._settings.set_boolean('double-copy-enabled', false);
-            const origAutoPaste = indicator.autoPasteSwitch.state;
-            indicator.autoPasteSwitch.setToggleState(false);
-            const origAutoTranslate = indicator.autoTranslateSwitch.state;
-            indicator.autoTranslateSwitch.setToggleState(false);
-            indicator._lastClipboardTime = null;
-            indicator._lastClipboardText = null;
-            indicator._isInternalCopy = false;
-
-            let readCount = 0;
-            const origGetText = Clipboard.get_text;
-            Clipboard.get_text = function(type, callback) {
-                readCount++;
-                callback(Clipboard, "P0 probe text");
-            };
-            try {
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                if (readCount !== 0) {
-                    return { success: false, error: "P0 gate violated: clipboard read " + readCount + "x with gesture OFF + auto-paste OFF" };
-                }
-            } finally {
-                Clipboard.get_text = origGetText;
-                indicator._settings.set_boolean('double-copy-enabled', origGesture);
-                indicator.autoPasteSwitch.setToggleState(origAutoPaste);
-                indicator.autoTranslateSwitch.setToggleState(origAutoTranslate);
             }
         } catch (e) {
-            return { success: false, error: "P0 gate test failed: " + (e.message || String(e)) };
+            return { success: false, error: "Quick Translate mode test failed: " + (e.message || String(e)) };
         }
 
-        // Test 8f: kill-switch — gesture OFF + auto-paste ON reads but never triggers;
-        // flipping the gesture back ON re-arms the double-copy trigger.
-        try {
-            const Meta = imports.gi.Meta;
-            const GLib = imports.gi.GLib;
-            const St = imports.gi.St;
-            const Clipboard = St.Clipboard.get_default();
-
-            const origMonotonic = GLib.get_monotonic_time;
-            let mockTime = 10000000;
-            GLib.get_monotonic_time = function() {
-                return mockTime;
-            };
-
-            const origGetText = Clipboard.get_text;
-            let mockClipboardText = "Kill switch probe";
-            Clipboard.get_text = function(type, callback) {
-                callback(Clipboard, mockClipboardText);
-            };
-
-            const origIndependent = indicator._translateTextIndependent;
-            let triggeredText = null;
-            indicator._translateTextIndependent = function(fromText, callback) {
-                triggeredText = fromText;
-            };
-
-            const origGesture = indicator._settings.get_boolean('double-copy-enabled');
-            const origAutoPaste = indicator.autoPasteSwitch.state;
-            const origAutoTranslate = indicator.autoTranslateSwitch.state;
-            indicator.autoTranslateSwitch.setToggleState(false);
-            indicator.autoPasteSwitch.setToggleState(true);
-            try {
-                // Disarmed: two identical copies must NOT trigger...
-                indicator._settings.set_boolean('double-copy-enabled', false);
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                indicator._isInternalCopy = false;
-                mockTime = 10000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                mockTime = 10200000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                if (triggeredText !== null) {
-                    return { success: false, error: "Kill-switch violated: double-copy triggered with gesture OFF" };
-                }
-                if (indicator._lastClipboardText !== null) {
-                    return { success: false, error: "Kill-switch violated: clipboard state armed while gesture OFF" };
-                }
-
-                // Re-armed: same sequence must trigger again.
-                indicator._settings.set_boolean('double-copy-enabled', true);
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                triggeredText = null;
-                mockTime = 11000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                mockTime = 11200000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                if (triggeredText !== "Kill switch probe") {
-                    return { success: false, error: "Kill-switch re-arm failed: double-copy did not trigger with gesture ON" };
-                }
-            } finally {
-                GLib.get_monotonic_time = origMonotonic;
-                Clipboard.get_text = origGetText;
-                indicator._translateTextIndependent = origIndependent;
-                indicator._settings.set_boolean('double-copy-enabled', origGesture);
-                indicator.autoPasteSwitch.setToggleState(origAutoPaste);
-                indicator.autoTranslateSwitch.setToggleState(origAutoTranslate);
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-            }
-        } catch (e) {
-            return { success: false, error: "Kill-switch test failed: " + (e.message || String(e)) };
-        }
-
-        // Test 8f2: custom detection window — narrow window triggers inside
-        // and ignores outside; helper clamps and falls back sanely.
-        try {
-            const Meta = imports.gi.Meta;
-            const GLib = imports.gi.GLib;
-            const St = imports.gi.St;
-            const Clipboard = St.Clipboard.get_default();
-
-            if (typeof indicator._getDoubleCopyWindowUs !== 'function') {
-                return { success: false, error: "Custom window test failed: _getDoubleCopyWindowUs missing" };
-            }
-            const origDelay = indicator._settings.get_int('double-copy-delay');
-            const origMonotonic = GLib.get_monotonic_time;
-            let mockTime = 20000000;
-            GLib.get_monotonic_time = function() {
-                return mockTime;
-            };
-            const origGetText = Clipboard.get_text;
-            let mockClipboardText = "Custom window probe";
-            Clipboard.get_text = function(type, callback) {
-                callback(Clipboard, mockClipboardText);
-            };
-            const origIndependent = indicator._translateTextIndependent;
-            let triggeredText = null;
-            indicator._translateTextIndependent = function(fromText, callback) {
-                triggeredText = fromText;
-            };
-            const origGesture = indicator._settings.get_boolean('double-copy-enabled');
-            const origAutoPaste = indicator.autoPasteSwitch.state;
-            const origAutoTranslate = indicator.autoTranslateSwitch.state;
-            indicator.autoTranslateSwitch.setToggleState(false);
-            indicator.autoPasteSwitch.setToggleState(false);
-            try {
-                indicator._settings.set_boolean('double-copy-enabled', true);
-                // Sanity: default helper returns 2000ms in microseconds.
-                indicator._settings.set_int('double-copy-delay', 2000);
-                if (indicator._getDoubleCopyWindowUs() !== 2000000) {
-                    return { success: false, error: "Window helper returned " + indicator._getDoubleCopyWindowUs() + " instead of 2000000" };
-                }
-                // Narrow window: +400ms triggers, +800ms does not.
-                indicator._settings.set_int('double-copy-delay', 500);
-                if (indicator._getDoubleCopyWindowUs() !== 500000) {
-                    return { success: false, error: "Window helper did not respect custom 500ms delay" };
-                }
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                indicator._isInternalCopy = false;
-                triggeredText = null;
-                mockTime = 20000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                mockTime = 20400000; // +400ms: inside 500ms window
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                if (triggeredText !== "Custom window probe") {
-                    return { success: false, error: "Custom 500ms window failed: +400ms copy did not trigger" };
-                }
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-                indicator._isInternalCopy = false;
-                triggeredText = null;
-                mockTime = 21000000;
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                mockTime = 21800000; // +800ms: outside 500ms window
-                indicator._onSelectionChange(null, Meta.SelectionType.SELECTION_CLIPBOARD, null);
-                if (triggeredText !== null) {
-                    return { success: false, error: "Custom 500ms window failed: +800ms copy triggered anyway" };
-                }
-            } finally {
-                GLib.get_monotonic_time = origMonotonic;
-                Clipboard.get_text = origGetText;
-                indicator._translateTextIndependent = origIndependent;
-                indicator._settings.set_int('double-copy-delay', origDelay);
-                indicator._settings.set_boolean('double-copy-enabled', origGesture);
-                indicator.autoPasteSwitch.setToggleState(origAutoPaste);
-                indicator.autoTranslateSwitch.setToggleState(origAutoTranslate);
-                indicator._lastClipboardTime = null;
-                indicator._lastClipboardText = null;
-            }
-        } catch (e) {
-            return { success: false, error: "Custom window test failed: " + (e.message || String(e)) };
-        }
-
-        // Test 8g: typing debounce — rapid typing collapses to a single translation;
+        // Test 8e: typing debounce — rapid typing collapses to a single translation;
         // with auto-translate OFF no debounce is even armed (synchronous check,
         // no wall-clock wait so the Eval stays well within the poll window).
         try {
@@ -1033,7 +668,7 @@ global.testRunnerPromise = (async () => {
             return { success: false, error: "Debounce test failed: " + (e.message || String(e)) };
         }
 
-        // Test 9: FloatingTranslationWindow layout, centering, and Escape key handler
+        // Test 9: FloatingTranslationWindow layout, placement, and Escape key handler
         try {
             let FloatingTranslationWindow = indicator.FloatingTranslationWindow;
             let win = new FloatingTranslationWindow("Input text", "Output text", "EN", "FR", () => {
@@ -1050,15 +685,34 @@ global.testRunnerPromise = (async () => {
                 return { success: false, error: "Actor style class is incorrect" };
             }
 
-            // Simulate allocation event to trigger centering logic
+            // Simulate allocation event to trigger fit + placement logic
             win.actor.notify('allocation');
 
-            let monitor = Main.layoutManager.primaryMonitor;
-            let expectedX = monitor.x + (monitor.width - win.actor.get_width()) / 2;
-            let expectedY = monitor.y + (monitor.height - win.actor.get_height()) / 2;
-            if (win.actor.x !== expectedX || win.actor.y !== expectedY) {
+            // Popup opens next to the pointer (selection proxy), inside the work area.
+            let [ptrX, ptrY] = global.get_pointer();
+            let monIdx = Math.max(0, Main.layoutManager.monitors.findIndex(m =>
+                ptrX >= m.x && ptrX < m.x + m.width && ptrY >= m.y && ptrY < m.y + m.height));
+            let wa = Main.layoutManager.getWorkAreaForMonitor(monIdx);
+            let [, pw] = win.actor.get_preferred_width(-1);
+            let [, ph] = win.actor.get_preferred_height(pw);
+            if (win.actor.x < wa.x || win.actor.y < wa.y ||
+                win.actor.x + pw > wa.x + wa.width || win.actor.y + ph > wa.y + wa.height) {
                 win.destroy();
-                return { success: false, error: "FloatingTranslationWindow was not centered correctly! Expected: " + expectedX + "," + expectedY + " Got: " + win.actor.x + "," + win.actor.y };
+                return { success: false, error: "FloatingTranslationWindow left the work area: " + win.actor.x + "," + win.actor.y };
+            }
+            let nearX = Math.abs(win.actor.x - ptrX) <= pw + 32;
+            let nearY = Math.abs(win.actor.y - ptrY) <= ph + 32;
+            if (!nearX || !nearY) {
+                win.destroy();
+                return { success: false, error: "FloatingTranslationWindow not placed near pointer " + ptrX + "," + ptrY + " Got: " + win.actor.x + "," + win.actor.y };
+            }
+
+            // Wrapped text must fit its scroll area (no overflow).
+            let destLabel = win._destLabel;
+            let [, needH] = destLabel.get_preferred_height(destLabel.get_width());
+            if (needH <= 300 && win._destScroll.get_height() + 0.5 < needH) {
+                win.destroy();
+                return { success: false, error: "Translated text taller than its scroll area: " + needH };
             }
 
             // Verify escape key event destroys the window
@@ -1083,7 +737,7 @@ global.testRunnerPromise = (async () => {
                 indicator._floatingWindow.destroy();
                 indicator._floatingWindow = null;
             }
-            return { success: false, error: "FloatingTranslationWindow centering/Escape test failed: " + e.message };
+            return { success: false, error: "FloatingTranslationWindow placement/Escape test failed: " + e.message };
         }
 
         // Test 10: insecure DeepL URL is refused on BOTH translate paths.

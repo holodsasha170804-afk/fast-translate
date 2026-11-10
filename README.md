@@ -31,16 +31,16 @@ lastcommit-badge: True
 > [!NOTE]
 > This project is a modernized fork of the original [translate-assistant](https://github.com/atareao/translate-assistant) extension by [Lorenzo Carbonell (atareao)](https://github.com/atareao).
 
-<span id="project_title">Fast Translate for GNOME Shell</span> is a GNOME Shell extension that brings **Google Translate and DeepL-powered translation** directly into your desktop — translate text from a panel popup or trigger instant clipboard translation with a double-copy shortcut.
+<span id="project_title">Fast Translate for GNOME Shell</span> is a GNOME Shell extension that brings **Google Translate and DeepL-powered translation** directly into your desktop — translate text from a panel popup or trigger instant clipboard translation with a configurable shortcut.
 
 ![Fast Translate banner](./screenshots/banner.webp)
 
 ## ✨ Features
 
-- **Panel menu translator** — a clean popover accessible from the GNOME top bar lets you type or paste text and translate it instantly.
+- **Panel menu translator** — a clean popover accessible from the GNOME top bar lets you type or paste text with `Ctrl+V` and translate it instantly.
 - **Inline language selector** — switch source and target languages directly inside the popup using a flag-emoji grid, no settings window needed.
-- **Double-copy translation** — copy the same text twice in rapid succession (e.g. `Ctrl+C` `Ctrl+C` or context menu Copy) to trigger instant translation. Choose between displaying the result in a floating window, or running silently in the background to auto-copy the translation directly to your clipboard for immediate pasting (`Ctrl+V`).
-- **Configurable shortcut** — the clipboard-translate keybinding can be customised in the extension preferences.
+- **Quick Translate** — select text and press `Ctrl+Alt+E`; the extension copies the selection and translates it from any application, including browsers. Choose between a floating window or silent background translation that copies the result for immediate pasting.
+- **Configurable shortcut** — `Ctrl+Alt+E` is the default and can be changed or cleared in the extension preferences.
 - **Multiple Backends** — choose between Google Translate (works instantly out-of-the-box, no key required) and DeepL (Free & Pro tiers).
 
 > [!NOTE]
@@ -74,20 +74,18 @@ lastcommit-badge: True
 
 ## Using <span id="project_title">Fast Translate for GNOME Shell</span>
 
-Once enabled, the extension icon appears in the GNOME top bar. Click it to open the translation popup, type or paste text, choose your languages, and hit **Translate**.
+Once enabled, the extension icon appears in the GNOME top bar. Click it to open the translation popup, type or paste text with `Ctrl+V`, choose your languages, and hit **Translate**. With **Auto Paste** and **Auto Translate** enabled, opening the panel after copying text fills and translates it automatically.
 
 ![Panel popup showing the translation interface](./screenshots/main.webp)
 
-### Double-copy clipboard translation
+### Quick Translate
 
-Copy any text normally, then copy it a second time within the detection window (default 500 ms, adjustable 300–5000 ms in preferences; works via `Ctrl+C` twice, context menu Copy, or any copy action). Depending on your preferences:
+Select text in any application and press `Ctrl+Alt+E`. The extension sends a single `Ctrl+C` to the active application, waits for the clipboard to update, and translates the copied selection. The shortcut works system-wide and can be reassigned in preferences. Depending on your preferences:
 
 - **Default mode**: A floating window appears with the translated result — no focus stealing, no screen dimming.
 - **Background mode**: The translation runs silently in the background and automatically updates your clipboard, allowing you to instantly paste (`Ctrl+V`) the translated text without distraction. An optional desktop toast notification is shown on completion.
 
-![Floating window triggered by the double-copy shortcut](./screenshots/CTRLCC.webp)
-
-![Preferences showing the Double Ctrl+C group with detection window](./screenshots/prefs-double-copy.webp)
+![Floating window triggered by Quick Translate](./screenshots/CTRLCC.webp)
 
 ### Preferences
 
@@ -96,11 +94,10 @@ Open **GNOME Settings → Extensions → Fast Translate → Settings** to config
 - Active translation service (Google Translate or DeepL)
 - DeepL API key & URL (automatically hidden when Google Translate is selected)
 - Default source and target languages
-- Clipboard-translate keybinding
+- Quick Translate keybinding (default `Ctrl+Alt+E`)
 - Auto-translate behavior
 - Dark/light theme icons and notifications
-- **Double-copy Background Mode** (enable silent clipboard-to-clipboard translation)
-- **Double-copy Detection Window** (max time between the two copies, 300–5000 ms)
+- **Quick Translate Background Mode** (enable silent clipboard-to-clipboard translation)
 - **Show Notification in Background Mode** (enable/disable completion toasts)
 
 <!-- end using -->
@@ -108,6 +105,20 @@ Open **GNOME Settings → Extensions → Fast Translate → Settings** to config
 <!-- start contributing -->
 
 ## Contributing to <span id="project_title">Translate Assistant for GNOME Shell</span>
+
+### Local development commands
+
+Run these commands from the project directory:
+
+```bash
+npm run build   # build the extension package
+npm run apply   # install the existing package and reload the extension
+npm run deploy  # build, install, and reload in one command
+```
+
+`npm run apply` verifies that the package is fresh before installing it. If a
+GSettings schema change is not visible after deployment, log out of GNOME and
+log back in.
 
 1. Fork this repository.
 2. Create a branch: `git checkout -b <branch_name>`.
@@ -210,4 +221,4 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 
 ## 🤝 Credits & Attribution
 
-This project is a fork of the original [atareao/translate-assistant](https://github.com/atareao/translate-assistant) extension by Lorenzo Carbonell Cerezo, licensed under the MIT License. Significant features (including Google Translate default backend, Ctrl+C+C double-copy instant translation, background mode, inline flag-emoji grid selection, high-DPI scaling, and integration tests) were added in this fork.
+This project is a fork of the original [atareao/translate-assistant](https://github.com/atareao/translate-assistant) extension by Lorenzo Carbonell Cerezo, licensed under the MIT License. Significant features (including Google Translate default backend, configurable Quick Translate, background mode, inline flag-emoji grid selection, high-DPI scaling, and integration tests) were added in this fork.

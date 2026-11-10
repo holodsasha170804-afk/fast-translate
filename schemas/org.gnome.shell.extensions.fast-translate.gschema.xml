@@ -111,9 +111,9 @@
             <description>Set DeepL API key</description>
         </key>
         <key name="keybinding-translate-clipboard" type="as">
-            <default><![CDATA[[]]]></default>
-            <summary>Shortcut</summary>
-            <description>Shortcut to translate the content of the clipboard</description>
+            <default><![CDATA[['<Control><Alt>e']]]></default>
+            <summary>Quick Translate shortcut</summary>
+            <description>Shortcut to copy the active text selection and translate it in a floating popup</description>
         </key>
         <key name="notifications" type="b">
             <default>false</default>
@@ -138,23 +138,12 @@
          <key name="floating-background-mode" type="b">
             <default>false</default>
             <summary>Background Mode</summary>
-            <description>Translate in background on double-copy instead of showing the floating window</description>
+            <description>Translate in background when Quick Translate is triggered instead of showing the floating window</description>
          </key>
          <key name="floating-background-toast" type="b">
             <default>true</default>
             <summary>Show Notification in Background Mode</summary>
             <description>Display a notification when background translation finishes</description>
-         </key>
-         <key name="double-copy-enabled" type="b">
-            <default>false</default>
-            <summary>Enable Double-Copy Gesture</summary>
-            <description>Trigger instant translation when the same text is copied twice in quick succession (e.g. Ctrl+C Ctrl+C or context menu Copy). Turn off if translation windows appear unwantedly.</description>
-         </key>
-         <key name="double-copy-delay" type="i">
-            <default>500</default>
-            <range min="300" max="5000"/>
-            <summary>Double-copy detection window</summary>
-            <description>Maximum milliseconds between two identical copies to trigger instant translation. Smaller is stricter; larger triggers more easily but may cause unwanted popups.</description>
          </key>
          <key name="auto-translate" type="b">
             <default>false</default>

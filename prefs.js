@@ -26,7 +26,6 @@ import Gtk from "gi://Gtk?version=4.0";
 import Adw from "gi://Adw";
 import Gio from "gi://Gio";
 import Gdk from "gi://Gdk?version=4.0";
-import GLib from "gi://GLib";
 import { ExtensionPreferences, gettext as _ } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
 export default class FastTranslatePreferences extends ExtensionPreferences {
@@ -192,109 +191,16 @@ export default class FastTranslatePreferences extends ExtensionPreferences {
         settings.bind('auto-copy', autoCopyRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         autoGroup.add(autoCopyRow);
 
-        // Group 4: Double-Copy Gesture
-        const doubleCopyGroup = new Adw.PreferencesGroup({
-            title: _('Double-Copy Gesture'),
-            description: _('Copy the same text twice quickly (e.g. Ctrl+C Ctrl+C or context menu Copy) to translate it instantly.'),
+        // Group 4: Quick Translate
+        const quickTranslateGroup = new Adw.PreferencesGroup({
+            title: _('Quick Translate'),
+            description: _('Select text in any application, then use the shortcut to copy and translate it.'),
         });
-        preferencesPage.add(doubleCopyGroup);
-
-        const doubleCopyEnabledRow = new Adw.SwitchRow({
-            title: _('Enable Gesture'),
-            subtitle: _('Translate when the same text is copied twice quickly. Turn off if popups appear unwantedly.'),
-        });
-        settings.bind('double-copy-enabled', doubleCopyEnabledRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        doubleCopyGroup.add(doubleCopyEnabledRow);
-
-        // Detection window (ms). Manual sync: SpinRow.value is double,
-        // GSettings key is int, so bind() with its type mismatch can't be used.
-        const delayAdjustment = new Gtk.Adjustment({
-            lower: 300,
-            upper: 5000,
-            step_increment: 100,
-            page_increment: 500,
-            value: 500,
-        });
-        const delayRow = new Adw.SpinRow({
-            title: _('Detection Window'),
-            subtitle: _('Max time between the two copies in milliseconds. Larger values trigger more easily but can cause unwanted popups.'),
-            adjustment: delayAdjustment,
-        });
-        const syncDelayFromSettings = () => {
-            try {
-                const v = settings.get_int('double-copy-delay');
-                if (Number.isFinite(v) && Math.round(delayRow.value) !== v)
-                    delayRow.value = v;
-            } catch (e) {
-                // Old schema without the key: leave the default visible.
-            }
-        };
-        syncDelayFromSettings();
-        let _delayUpdating = false;
-        delayRow.connect('notify::value', () => {
-            if (_delayUpdating) return;
-            try {
-                settings.set_int('double-copy-delay', Math.round(delayRow.value));
-            } catch (e) {
-                // Ignore writes while the new schema isn't installed yet.
-            }
-        });
-        settings.connect('changed::double-copy-delay', () => {
-            _delayUpdating = true;
-            try { syncDelayFromSettings(); } finally { _delayUpdating = false; }
-        });
-        doubleCopyGroup.add(delayRow);
-
-        const floatingAutoCopyRow = new Adw.SwitchRow({
-            title: _('Auto Copy Popup Result'),
-            subtitle: _('Copy popup result to clipboard'),
-        });
-        settings.bind('floating-auto-copy', floatingAutoCopyRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        doubleCopyGroup.add(floatingAutoCopyRow);
-
-        const backgroundModeRow = new Adw.SwitchRow({
-            title: _('Run in Background'),
-            subtitle: _('Translate without showing the popup. The result is always copied.'),
-        });
-        settings.bind('floating-background-mode', backgroundModeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        doubleCopyGroup.add(backgroundModeRow);
-
-        const backgroundToastRow = new Adw.SwitchRow({
-            title: _('Background Notification'),
-            subtitle: _('Show the result in a notification when running in background'),
-        });
-        settings.bind('floating-background-toast', backgroundToastRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        doubleCopyGroup.add(backgroundToastRow);
-
-        // Dim gesture-dependent rows while the master switch is OFF so the UI
-        // never suggests options that currently do nothing.
-        const syncDoubleCopySensitive = () => {
-            const enabled = doubleCopyEnabledRow.active;
-            delayRow.sensitive = enabled;
-            floatingAutoCopyRow.sensitive = enabled;
-            backgroundModeRow.sensitive = enabled;
-            backgroundToastRow.sensitive = enabled && backgroundModeRow.active;
-        };
-        doubleCopyEnabledRow.connect('notify::active', syncDoubleCopySensitive);
-        backgroundModeRow.connect('notify::active', syncDoubleCopySensitive);
-        syncDoubleCopySensitive();
-
-        // Group 5: System
-        const systemGroup = new Adw.PreferencesGroup({
-            title: _('System'),
-        });
-        preferencesPage.add(systemGroup);
-
-        const notificationsRow = new Adw.SwitchRow({
-            title: _('Panel Notification'),
-            subtitle: _('Also show a notification when a panel translation finishes'),
-        });
-        settings.bind('notifications', notificationsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
-        systemGroup.add(notificationsRow);
+        preferencesPage.add(quickTranslateGroup);
 
         const shortcutRow = new Adw.ActionRow({
-            title: _('Clipboard Shortcut'),
-            subtitle: _('Translate clipboard instantly. Click this row, then press keys to set, Esc to clear.'),
+            title: _('Quick Translate Shortcut'),
+            subtitle: _('Click this row, then press keys to set the shortcut. Press Esc to clear it.'),
             activatable: true,
             focusable: true,
         });
@@ -316,16 +222,13 @@ export default class FastTranslatePreferences extends ExtensionPreferences {
         updateShortcutLabel();
         settings.connect('changed::keybinding-translate-clipboard', updateShortcutLabel);
 
-        // Click/Enter grabs keyboard focus so the key controller below receives events.
-        // Without activatable + focusable the row can never be focused (the reported bug).
         shortcutRow.connect('activated', () => {
             shortcutRow.grab_focus();
         });
 
-        // Hint while capturing: swap subtitle on focus enter/leave.
         const shortcutFocus = new Gtk.EventControllerFocus();
         shortcutRow.add_controller(shortcutFocus);
-        const shortcutHintDefault = _('Translate clipboard instantly. Click this row, then press keys to set, Esc to clear.');
+        const shortcutHintDefault = _('Click this row, then press keys to set the shortcut. Press Esc to clear it.');
         const shortcutHintCapturing = _('Press keys now, Esc to clear…');
         shortcutFocus.connect('enter', () => {
             shortcutRow.subtitle = shortcutHintCapturing;
@@ -372,7 +275,7 @@ export default class FastTranslatePreferences extends ExtensionPreferences {
                 return true;
             }
 
-            // We only accept shortcuts with modifiers (e.g. Ctrl, Super, Alt) or function keys
+            // Accept modified shortcuts and standalone function keys.
             if (mask === 0 && (keyval < Gdk.KEY_F1 || keyval > Gdk.KEY_F12)) {
                 return false;
             }
@@ -385,7 +288,47 @@ export default class FastTranslatePreferences extends ExtensionPreferences {
             }
             return false;
         });
-        systemGroup.add(shortcutRow);
+        quickTranslateGroup.add(shortcutRow);
+
+        const floatingAutoCopyRow = new Adw.SwitchRow({
+            title: _('Auto Copy Popup Result'),
+            subtitle: _('Copy popup result to clipboard'),
+        });
+        settings.bind('floating-auto-copy', floatingAutoCopyRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        quickTranslateGroup.add(floatingAutoCopyRow);
+
+        const backgroundModeRow = new Adw.SwitchRow({
+            title: _('Run in Background'),
+            subtitle: _('Translate without showing the popup. The result is always copied.'),
+        });
+        settings.bind('floating-background-mode', backgroundModeRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        quickTranslateGroup.add(backgroundModeRow);
+
+        const backgroundToastRow = new Adw.SwitchRow({
+            title: _('Background Notification'),
+            subtitle: _('Show the result in a notification when running in background'),
+        });
+        settings.bind('floating-background-toast', backgroundToastRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        quickTranslateGroup.add(backgroundToastRow);
+
+        const syncBackgroundSensitive = () => {
+            backgroundToastRow.sensitive = backgroundModeRow.active;
+        };
+        backgroundModeRow.connect('notify::active', syncBackgroundSensitive);
+        syncBackgroundSensitive();
+
+        // Group 5: System
+        const systemGroup = new Adw.PreferencesGroup({
+            title: _('System'),
+        });
+        preferencesPage.add(systemGroup);
+
+        const notificationsRow = new Adw.SwitchRow({
+            title: _('Panel Notification'),
+            subtitle: _('Also show a notification when a panel translation finishes'),
+        });
+        settings.bind('notifications', notificationsRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        systemGroup.add(notificationsRow);
 
 
         // ----------------- ABOUT PAGE -----------------

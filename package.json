@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "build": "bash scripts/pack.sh",
+    "apply": "bash scripts/apply.sh",
+    "deploy": "npm run build && npm run apply",
     "test": "node test/unit.test.js && gjs -m test/prefs-validator.js && bash test/zip-contents.sh",
     "test:integration": "bash test/integration.sh"
   }
