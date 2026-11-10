@@ -676,6 +676,7 @@ var FastTranslate = GObject.registerClass(
                 }
                 if (this.errorLabel) {
                     this.errorLabel.text = "";
+                    this.errorLabel.visible = false;
                 }
 
                 // Cancel any in-flight request so rapid triggers don't race;
@@ -1016,6 +1017,7 @@ var FastTranslate = GObject.registerClass(
         _showError(messageText) {
             if (this.errorLabel) {
                 this.errorLabel.text = messageText;
+                this.errorLabel.visible = true;
             } else {
                 Main.notify("Fast Translate", messageText);
             }
@@ -1240,6 +1242,7 @@ var FastTranslate = GObject.registerClass(
                 this.outputEntry.get_clutter_text().set_text("");
                 if (this.errorLabel) {
                     this.errorLabel.text = "";
+                    this.errorLabel.visible = false;
                 }
             });
             inputActions.add_child(this.pasteBtn);
@@ -1272,6 +1275,7 @@ var FastTranslate = GObject.registerClass(
             this.errorLabel = new St.Label({
                 style_class: 'translate-error-label',
                 text: '',
+                visible: false,
                 x_align: Clutter.ActorAlign.CENTER
             });
             middleRow.add_child(this.errorLabel);
