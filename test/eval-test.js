@@ -668,7 +668,7 @@ global.testRunnerPromise = (async () => {
             return { success: false, error: "Debounce test failed: " + (e.message || String(e)) };
         }
 
-        // Test 9: FloatingTranslationWindow layout, centering, and Escape key handler
+        // Test 9: FloatingTranslationWindow layout, placement, and Escape key handler
         try {
             let FloatingTranslationWindow = indicator.FloatingTranslationWindow;
             let win = new FloatingTranslationWindow("Input text", "Output text", "EN", "FR", () => {
@@ -685,15 +685,34 @@ global.testRunnerPromise = (async () => {
                 return { success: false, error: "Actor style class is incorrect" };
             }
 
-            // Simulate allocation event to trigger centering logic
+            // Simulate allocation event to trigger fit + placement logic
             win.actor.notify('allocation');
 
-            let monitor = Main.layoutManager.primaryMonitor;
-            let expectedX = monitor.x + (monitor.width - win.actor.get_width()) / 2;
-            let expectedY = monitor.y + (monitor.height - win.actor.get_height()) / 2;
-            if (win.actor.x !== expectedX || win.actor.y !== expectedY) {
+            // Popup opens next to the pointer (selection proxy), inside the work area.
+            let [ptrX, ptrY] = global.get_pointer();
+            let monIdx = Math.max(0, Main.layoutManager.monitors.findIndex(m =>
+                ptrX >= m.x && ptrX < m.x + m.width && ptrY >= m.y && ptrY < m.y + m.height));
+            let wa = Main.layoutManager.getWorkAreaForMonitor(monIdx);
+            let [, pw] = win.actor.get_preferred_width(-1);
+            let [, ph] = win.actor.get_preferred_height(pw);
+            if (win.actor.x < wa.x || win.actor.y < wa.y ||
+                win.actor.x + pw > wa.x + wa.width || win.actor.y + ph > wa.y + wa.height) {
                 win.destroy();
-                return { success: false, error: "FloatingTranslationWindow was not centered correctly! Expected: " + expectedX + "," + expectedY + " Got: " + win.actor.x + "," + win.actor.y };
+                return { success: false, error: "FloatingTranslationWindow left the work area: " + win.actor.x + "," + win.actor.y };
+            }
+            let nearX = Math.abs(win.actor.x - ptrX) <= pw + 32;
+            let nearY = Math.abs(win.actor.y - ptrY) <= ph + 32;
+            if (!nearX || !nearY) {
+                win.destroy();
+                return { success: false, error: "FloatingTranslationWindow not placed near pointer " + ptrX + "," + ptrY + " Got: " + win.actor.x + "," + win.actor.y };
+            }
+
+            // Wrapped text must fit its scroll area (no overflow).
+            let destLabel = win._destLabel;
+            let [, needH] = destLabel.get_preferred_height(destLabel.get_width());
+            if (needH <= 300 && win._destScroll.get_height() + 0.5 < needH) {
+                win.destroy();
+                return { success: false, error: "Translated text taller than its scroll area: " + needH };
             }
 
             // Verify escape key event destroys the window
@@ -718,7 +737,7 @@ global.testRunnerPromise = (async () => {
                 indicator._floatingWindow.destroy();
                 indicator._floatingWindow = null;
             }
-            return { success: false, error: "FloatingTranslationWindow centering/Escape test failed: " + e.message };
+            return { success: false, error: "FloatingTranslationWindow placement/Escape test failed: " + e.message };
         }
 
         // Test 10: insecure DeepL URL is refused on BOTH translate paths.

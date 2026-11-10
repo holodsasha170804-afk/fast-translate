@@ -1774,10 +1774,30 @@ class FloatingTranslationWindow {
 
         // Compact adaptive translation popup
         const [pointerX, pointerY] = global.get_pointer();
-        const popupMonitor = Main.layoutManager.monitors.find(monitor =>
+        const popupMonitorIndex = Math.max(0, Main.layoutManager.monitors.findIndex(monitor =>
             pointerX >= monitor.x && pointerX < monitor.x + monitor.width &&
             pointerY >= monitor.y && pointerY < monitor.y + monitor.height
-        ) ?? Main.layoutManager.primaryMonitor;
+        ));
+        const popupMonitor = Main.layoutManager.monitors[popupMonitorIndex] ??
+            Main.layoutManager.primaryMonitor;
+
+        closeBtn.get_child().set_style('icon-size: 16px;');
+        copyBtn.get_child().set_style('icon-size: 16px;');
+        if (this.autoCopyBtn)
+            this.autoCopyBtn.get_child().set_style('icon-size: 16px;');
+
+        // St.Label only copies its CSS font onto the inner ClutterText on
+        // style-changed. Force style resolution for the whole tree first,
+        // otherwise text is measured with the default font and the computed
+        // heights end up too small (text overflowing the popup).
+        const ensureStyleTree = actor => {
+            if (actor instanceof St.Widget)
+                actor.ensure_style();
+            for (const child of actor.get_children())
+                ensureStyleTree(child);
+        };
+        ensureStyleTree(this.actor);
+
         // Measure styled text rather than guessing from character counts.
         const naturalWidth = Math.max(
             srcLabel.get_preferred_width(-1)[1],
@@ -1791,10 +1811,11 @@ class FloatingTranslationWindow {
         );
         this.actor.set_style(`width: ${contentWidth}px;`);
 
-        for (const [label, scroll, maxHeight] of [
+        const textBlocks = [
             [srcLabel, srcScroll, 110],
             [destLabel, destScroll, Math.min(300, popupMonitor.height * 0.35)]
-        ]) {
+        ];
+        for (const [label, scroll] of textBlocks) {
             scroll.x_expand = true;
             scroll.y_expand = false;
             label.get_parent().y_expand = false;
@@ -1806,25 +1827,49 @@ class FloatingTranslationWindow {
             textActor.set_line_wrap(true);
             textActor.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
             textActor.set_ellipsize(Pango.EllipsizeMode.NONE);
-            const [, naturalHeight] = label.get_preferred_height(contentWidth - 16);
-            scroll.set_height(Math.min(maxHeight, naturalHeight + 8));
         }
+        const fitTextHeights = () => {
+            for (const [label, scroll, maxHeight] of textBlocks) {
+                const [, naturalHeight] = label.get_preferred_height(label.get_width());
+                scroll.set_height(Math.ceil(Math.min(maxHeight, naturalHeight + 8)));
+            }
+        };
+        this._destLabel = destLabel;
+        this._destScroll = destScroll;
+        fitTextHeights();
 
-        closeBtn.get_child().set_style('icon-size: 16px;');
-        copyBtn.get_child().set_style('icon-size: 16px;');
-        if (this.autoCopyBtn)
-            this.autoCopyBtn.get_child().set_style('icon-size: 16px;');
+        // Open next to the selection: the pointer is the best available proxy
+        // (Wayland exposes no selection geometry). Prefer below-right of the
+        // pointer, flip above/left when it would leave the work area.
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(popupMonitorIndex) ?? popupMonitor;
+        const GAP = 16;
+        const place = () => {
+            const [, width] = this.actor.get_preferred_width(-1);
+            const [, height] = this.actor.get_preferred_height(width);
+            const minX = workArea.x + 8;
+            const maxX = workArea.x + workArea.width - width - 8;
+            const minY = workArea.y + 8;
+            const maxY = workArea.y + workArea.height - height - 8;
 
-        // Center on the monitor where the translation was requested.
-        let monitor = popupMonitor;
+            let x = pointerX + GAP;
+            if (x > maxX)
+                x = pointerX - GAP - width;
+            let y = pointerY + GAP;
+            if (y > maxY)
+                y = pointerY - GAP - height;
+
+            x = Math.max(minX, Math.min(x, Math.max(minX, maxX)));
+            y = Math.max(minY, Math.min(y, Math.max(minY, maxY)));
+            this.actor.set_position(Math.round(x), Math.round(y));
+        };
+        place();
+
+        // Re-check once real layout exists (fonts are guaranteed applied by now).
         this._allocationId = this.actor.connect('notify::allocation', () => {
             this.actor.disconnect(this._allocationId);
             this._allocationId = null;
-            let width = this.actor.get_width();
-            let height = this.actor.get_height();
-            let x = monitor.x + (monitor.width - width) / 2;
-            let y = monitor.y + (monitor.height - height) / 2;
-            this.actor.set_position(x, y);
+            fitTextHeights();
+            place();
         });
 
         // Key Press ID to close on Escape
@@ -1872,6 +1917,8 @@ class FloatingTranslationWindow {
             try { this.actor.disconnect(this._allocationId); } catch (e) {}
             this._allocationId = null;
         }
+        this._destLabel = null;
+        this._destScroll = null;
         if (this.overlay) {
             this.overlay.destroy();
             this.overlay = null;
