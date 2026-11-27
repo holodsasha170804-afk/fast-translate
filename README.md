@@ -32,12 +32,7 @@ Enable **Run in Background** to copy the translation directly to your clipboard.
 
 Click the **Fast Translate** icon. Type or paste text, pick your languages, and select **Translate**. Turn on **Auto Paste** to load clipboard text when the popup opens, **Auto Translate** to translate as you type, or **Auto Copy** to copy the result automatically.
 
-<details>
-<summary>Watch the top-bar demo</summary>
-
 ![Fast Translate top-bar demo showing text entry and the translated result](screenshots/fast-translate-panel-animated-no-arrow.gif)
-
-</details>
 
 ### Read aloud
 
