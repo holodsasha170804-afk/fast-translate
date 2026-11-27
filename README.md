@@ -19,11 +19,9 @@
   </p>
 </div>
 
-<!-- Optional new banner: replace screenshots/banner.webp before uncommenting.
 <p align="center">
-  <img src="screenshots/banner.webp" width="100%" alt="Fast Translate for GNOME">
+  <img src="screenshots/fast-translate-banner.svg" width="100%" alt="Fast Translate for GNOME — Translate in place">
 </p>
--->
 
 Fast Translate is a GNOME Shell extension that brings Google Translate and DeepL directly to your desktop. Translate selected text in any application, use the top-bar translator, or send translations straight to your clipboard — without opening a browser or switching windows.
 
