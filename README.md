@@ -75,7 +75,7 @@ Enable Fast Translate in the GNOME Extensions app if necessary. If schema change
 Click the Fast Translate icon in the GNOME top bar. Type or paste text with <kbd>Ctrl</kbd> + <kbd>V</kbd>, choose the source and target languages, and click **Translate**.
 
 <p align="center">
-  <img src="screenshots/main.webp" width="340" alt="Fast Translate top-bar popup">
+  <img src="screenshots/fast-translate-panel-animated-no-arrow.gif" width="100%" alt="Fast Translate top-bar demonstration — open the panel, enter text and get a translation">
 </p>
 
 Enable **Auto Paste** and **Auto Translate** to translate copied text automatically when opening the popup. **Auto Copy** copies the translated result to your clipboard.
